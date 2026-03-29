@@ -1,0 +1,5 @@
+{
+  "name": "NPC 档案与生成工具",
+  "description": "一个为游戏策划设计的专业工具，用于从文本中提取 NPC 并使用 AI 生成角色形象。",
+  "requestFramePermissions": []
+}
