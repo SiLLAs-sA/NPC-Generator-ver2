@@ -12,7 +12,7 @@ function getAI() {
 export async function extractNPCsFromText(text: string) {
   const ai = getAI();
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-1.5-flash",
     contents: `请从以下游戏设计文本中提取所有 NPC 角色。
     
     对于每个角色，请识别其名称和外貌特征。

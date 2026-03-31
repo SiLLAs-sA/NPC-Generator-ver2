@@ -18,9 +18,9 @@ export const saveApiKey = (key: string) => {
 export const testApiKey = async (key: string): Promise<{ success: boolean; error?: string }> => {
   try {
     const ai = new GoogleGenAI({ apiKey: key.trim() });
-    // Use a model that is more likely to be available and correctly named
+    // Use the most stable version to avoid 503/404 errors
     await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-1.5-flash",
       contents: "Hi",
     });
     return { success: true };
