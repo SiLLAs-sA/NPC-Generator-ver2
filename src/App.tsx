@@ -24,7 +24,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { NPC, ArchiveNPC, ReferenceGroup } from './types';
 import { extractNPCsFromText, generateNPCImage, generateTurnaroundImage, generateDetailItemImage } from './services/ai';
-import { getApiKey, saveApiKey } from './lib/apiKey';
+import { getApiKey, saveApiKey, testApiKey } from './lib/apiKey';
 import { extractPalette } from './lib/colorUtils';
 import { db } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -40,6 +40,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'generate' | 'archive' | 'settings'>('generate');
   const [apiKey, setApiKey] = useState(getApiKey());
   const [isKeySaved, setIsKeySaved] = useState(false);
+  const [isTestingKey, setIsTestingKey] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'fail'>('idle');
   const [inputText, setInputText] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [npcs, setNpcs] = useState<NPC[]>([]);
@@ -113,6 +115,11 @@ export default function App() {
 
   const handleExtract = async () => {
     if (!inputText.trim()) return;
+    if (!getApiKey()) {
+      alert('请先在“设置”中配置您的 Gemini API Key。');
+      setActiveTab('settings');
+      return;
+    }
     setIsExtracting(true);
     try {
       const extracted = await extractNPCsFromText(inputText);
@@ -132,6 +139,7 @@ export default function App() {
       setNpcs(prev => [...prev, ...newNpcs]);
     } catch (error) {
       console.error(error);
+      alert('提取失败，请检查 API Key 是否正确或网络是否通畅。');
     } finally {
       setIsExtracting(false);
     }
@@ -1210,44 +1218,75 @@ export default function App() {
                 <div className="space-y-4">
                   <div>
                     <label className="swiss-label">Gemini API Key</label>
-                    <div className="flex gap-2">
-                      <input 
-                        type="password" 
-                        value={apiKey} 
-                        onChange={(e) => {
-                          setApiKey(e.target.value);
-                          setIsKeySaved(false);
-                        }}
-                        placeholder="在此输入您的 Gemini API Key..."
-                        className="swiss-input" 
-                      />
-                      <button 
-                        onClick={() => {
-                          saveApiKey(apiKey);
-                          setIsKeySaved(true);
-                          setTimeout(() => setIsKeySaved(false), 2000);
-                        }}
-                        className={cn(
-                          "px-6 border border-black font-bold uppercase text-[10px] transition-all",
-                          isKeySaved ? "bg-green-600 text-white border-green-600" : "bg-black text-white hover:bg-gray-800"
-                        )}
-                      >
-                        {isKeySaved ? "已保存" : "保存密钥"}
-                      </button>
-                      {apiKey && (
+                    <div className="flex flex-col gap-3">
+                      <div className="flex gap-2">
+                        <input 
+                          type="password" 
+                          value={apiKey} 
+                          onChange={(e) => {
+                            setApiKey(e.target.value);
+                            setIsKeySaved(false);
+                            setTestStatus('idle');
+                          }}
+                          placeholder="在此输入您的 Gemini API Key..."
+                          className="swiss-input" 
+                        />
                         <button 
                           onClick={() => {
-                            setApiKey('');
-                            saveApiKey('');
-                            setIsKeySaved(false);
+                            saveApiKey(apiKey);
+                            setIsKeySaved(true);
+                            setTimeout(() => setIsKeySaved(false), 2000);
                           }}
-                          className="px-4 border border-black hover:bg-red-50 text-red-600 text-[10px] font-bold uppercase"
+                          className={cn(
+                            "px-6 border border-black font-bold uppercase text-[10px] transition-all",
+                            isKeySaved ? "bg-green-600 text-white border-green-600" : "bg-black text-white hover:bg-gray-800"
+                          )}
                         >
-                          清除
+                          {isKeySaved ? "已保存" : "保存密钥"}
                         </button>
-                      )}
+                        {apiKey && (
+                          <button 
+                            onClick={() => {
+                              setApiKey('');
+                              saveApiKey('');
+                              setIsKeySaved(false);
+                              setTestStatus('idle');
+                            }}
+                            className="px-4 border border-black hover:bg-red-50 text-red-600 text-[10px] font-bold uppercase"
+                          >
+                            清除
+                          </button>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-4">
+                        <button
+                          disabled={!apiKey || isTestingKey}
+                          onClick={async () => {
+                            setIsTestingKey(true);
+                            const success = await testApiKey(apiKey);
+                            setTestStatus(success ? 'success' : 'fail');
+                            setIsTestingKey(false);
+                          }}
+                          className="px-4 py-2 border border-black text-[10px] font-bold uppercase hover:bg-gray-100 disabled:opacity-30 flex items-center gap-2"
+                        >
+                          {isTestingKey ? <Loader2 className="animate-spin" size={14} /> : <Check size={14} />}
+                          测试连接
+                        </button>
+                        
+                        {testStatus === 'success' && (
+                          <span className="text-[10px] text-green-600 font-bold uppercase flex items-center gap-1">
+                            <Check size={14} /> 连接成功！API Key 有效。
+                          </span>
+                        )}
+                        {testStatus === 'fail' && (
+                          <span className="text-[10px] text-red-600 font-bold uppercase flex items-center gap-1">
+                            <X size={14} /> 连接失败。请检查密钥或网络。
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-[10px] mt-1 text-gray-500 uppercase">
+                    <p className="text-[10px] mt-2 text-gray-500 uppercase">
                       {process.env.GEMINI_API_KEY ? "已检测到系统环境变量，您可以在此覆盖它。" : "请在此输入您的 API Key 以启用 AI 功能。"}
                     </p>
                   </div>
