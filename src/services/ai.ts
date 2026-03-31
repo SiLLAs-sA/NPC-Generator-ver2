@@ -12,7 +12,7 @@ function getAI() {
 export async function extractNPCsFromText(text: string) {
   const ai = getAI();
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3-flash-preview",
     contents: `请从以下游戏设计文本中提取所有 NPC 角色。
     
     对于每个角色，请识别其名称和外貌特征。
@@ -50,8 +50,12 @@ export async function extractNPCsFromText(text: string) {
     }
   });
 
+  console.log("AI Extraction Response:", response);
+  const resultText = response.text || "[]";
+  console.log("AI Extraction Text:", resultText);
+
   try {
-    return JSON.parse(response.text || "[]");
+    return JSON.parse(resultText);
   } catch (e) {
     console.error("Failed to parse NPC extraction result", e);
     return [];
@@ -60,8 +64,7 @@ export async function extractNPCsFromText(text: string) {
 
 export async function generateNPCImage(prompt: string, negativePrompt: string, baseImages?: string[]) {
   const ai = getAI();
-  // Using gemini-2.5-flash-image for standard generation and editing
-  // Refined for game industry standards: A-pose/T-pose feel, clean background
+  // Using gemini-3.1-flash-image-preview for high-quality generation
   const finalPrompt = `character design sheet, full body standing, front view, centered, facing camera, pure white background, isolated on white, no background elements, no props, flat lighting, high detail, masterpiece, ${prompt}`;
   const finalNegativePrompt = `background elements, scenery, furniture, floor, shadow, text, watermark, signature, blurry, low quality, distorted, extra limbs, multiple characters, ${negativePrompt}`;
   
@@ -87,7 +90,7 @@ export async function generateNPCImage(prompt: string, negativePrompt: string, b
   }
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
+    model: 'gemini-3.1-flash-image-preview',
     contents,
     config: {
       imageConfig: {
@@ -111,7 +114,7 @@ export async function generateTurnaroundImage(baseImage: string, prompt: string)
   const base64Data = baseImage.includes(',') ? baseImage.split(',')[1] : baseImage;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
+    model: 'gemini-3.1-flash-image-preview',
     contents: {
       parts: [
         {
@@ -157,7 +160,7 @@ export async function generateDetailItemImage(itemDescription: string, npcStyle:
   parts.push({ text: finalPrompt });
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
+    model: 'gemini-3.1-flash-image-preview',
     contents: { parts },
     config: {
       imageConfig: {
