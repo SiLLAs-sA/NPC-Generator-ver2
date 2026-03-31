@@ -16,18 +16,28 @@ export const saveApiKey = (key: string) => {
 };
 
 export const testApiKey = async (key: string): Promise<{ success: boolean; error?: string }> => {
-  try {
-    const ai = new GoogleGenAI({ apiKey: key.trim() });
-    // Use the most stable version to avoid 503/404 errors
-    await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: "Hi",
-    });
-    return { success: true };
-  } catch (error: any) {
-    console.error("API Key Test Failed:", error);
-    // Extract a more readable error message if possible
-    const errorMsg = error?.message || JSON.stringify(error);
-    return { success: false, error: errorMsg };
+  const modelsToTry = ["gemini-3-flash-preview", "gemini-flash-latest", "gemini-1.5-flash"];
+  let lastError = "";
+
+  for (const modelName of modelsToTry) {
+    try {
+      const ai = new GoogleGenAI({ apiKey: key.trim() });
+      await ai.models.generateContent({
+        model: modelName,
+        contents: "Hi",
+      });
+      console.log(`API Key Test Succeeded with model: ${modelName}`);
+      return { success: true };
+    } catch (error: any) {
+      console.warn(`API Key Test failed for model ${modelName}:`, error?.message || error);
+      lastError = error?.message || JSON.stringify(error);
+      // If it's a 401 (Unauthorized), no point in trying other models
+      if (lastError.includes("401") || lastError.toLowerCase().includes("unauthorized") || lastError.toLowerCase().includes("invalid api key")) {
+        return { success: false, error: "API Key 无效，请检查您的密钥。" };
+      }
+      // Continue to next model for 404 or 503
+    }
   }
+
+  return { success: false, error: lastError || "所有测试模型均不可用，请稍后再试。" };
 };
