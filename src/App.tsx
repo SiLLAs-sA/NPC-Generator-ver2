@@ -42,6 +42,7 @@ export default function App() {
   const [isKeySaved, setIsKeySaved] = useState(false);
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'fail'>('idle');
+  const [testError, setTestError] = useState<string>('');
   const [inputText, setInputText] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [npcs, setNpcs] = useState<NPC[]>([]);
@@ -1264,9 +1265,22 @@ export default function App() {
                           disabled={!apiKey || isTestingKey}
                           onClick={async () => {
                             setIsTestingKey(true);
-                            const success = await testApiKey(apiKey);
-                            setTestStatus(success ? 'success' : 'fail');
-                            setIsTestingKey(false);
+                            setTestStatus('idle');
+                            setTestError('');
+                            try {
+                              const result = await testApiKey(apiKey);
+                              if (result.success) {
+                                setTestStatus('success');
+                              } else {
+                                setTestStatus('fail');
+                                setTestError(result.error || '验证失败。请检查您的 API Key 是否正确，或者网络连接是否有问题。');
+                              }
+                            } catch (err: any) {
+                              setTestStatus('fail');
+                              setTestError(err?.message || '发生未知错误');
+                            } finally {
+                              setIsTestingKey(false);
+                            }
                           }}
                           className="px-4 py-2 border border-black text-[10px] font-bold uppercase hover:bg-gray-100 disabled:opacity-30 flex items-center gap-2"
                         >
@@ -1274,16 +1288,25 @@ export default function App() {
                           测试连接
                         </button>
                         
-                        {testStatus === 'success' && (
-                          <span className="text-[10px] text-green-600 font-bold uppercase flex items-center gap-1">
-                            <Check size={14} /> 连接成功！API Key 有效。
-                          </span>
-                        )}
-                        {testStatus === 'fail' && (
-                          <span className="text-[10px] text-red-600 font-bold uppercase flex items-center gap-1">
-                            <X size={14} /> 连接失败。请检查密钥或网络。
-                          </span>
-                        )}
+                        <div className="flex flex-col">
+                          {testStatus === 'success' && (
+                            <span className="text-[10px] text-green-600 font-bold uppercase flex items-center gap-1">
+                              <Check size={14} /> 连接成功！API Key 有效。
+                            </span>
+                          )}
+                          {testStatus === 'fail' && (
+                            <>
+                              <span className="text-[10px] text-SwissRed font-bold uppercase flex items-center gap-1">
+                                <X size={14} /> 连接失败。请检查密钥或网络。
+                              </span>
+                              {testError && (
+                                <span className="text-[9px] text-red-400 mt-1 max-w-xs leading-tight">
+                                  错误详情: {testError}
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                     <p className="text-[10px] mt-2 text-gray-500 uppercase">

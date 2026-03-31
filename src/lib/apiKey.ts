@@ -15,16 +15,19 @@ export const saveApiKey = (key: string) => {
   }
 };
 
-export const testApiKey = async (key: string): Promise<boolean> => {
+export const testApiKey = async (key: string): Promise<{ success: boolean; error?: string }> => {
   try {
     const ai = new GoogleGenAI({ apiKey: key.trim() });
+    // Use a model that is more likely to be available and correctly named
     await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: "gemini-3-flash-preview",
       contents: "Hi",
     });
-    return true;
-  } catch (error) {
+    return { success: true };
+  } catch (error: any) {
     console.error("API Key Test Failed:", error);
-    return false;
+    // Extract a more readable error message if possible
+    const errorMsg = error?.message || JSON.stringify(error);
+    return { success: false, error: errorMsg };
   }
 };
