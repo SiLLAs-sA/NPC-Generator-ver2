@@ -39,6 +39,7 @@ const STYLE_PRESETS = [
 export default function App() {
   const [activeTab, setActiveTab] = useState<'generate' | 'archive' | 'settings'>('generate');
   const [apiKey, setApiKey] = useState(getApiKey());
+  const [isKeySaved, setIsKeySaved] = useState(false);
   const [inputText, setInputText] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [npcs, setNpcs] = useState<NPC[]>([]);
@@ -1214,20 +1215,33 @@ export default function App() {
                         type="password" 
                         value={apiKey} 
                         onChange={(e) => {
-                          const newKey = e.target.value;
-                          setApiKey(newKey);
-                          saveApiKey(newKey);
+                          setApiKey(e.target.value);
+                          setIsKeySaved(false);
                         }}
                         placeholder="在此输入您的 Gemini API Key..."
                         className="swiss-input" 
                       />
+                      <button 
+                        onClick={() => {
+                          saveApiKey(apiKey);
+                          setIsKeySaved(true);
+                          setTimeout(() => setIsKeySaved(false), 2000);
+                        }}
+                        className={cn(
+                          "px-6 border border-black font-bold uppercase text-[10px] transition-all",
+                          isKeySaved ? "bg-green-600 text-white border-green-600" : "bg-black text-white hover:bg-gray-800"
+                        )}
+                      >
+                        {isKeySaved ? "已保存" : "保存密钥"}
+                      </button>
                       {apiKey && (
                         <button 
                           onClick={() => {
                             setApiKey('');
                             saveApiKey('');
+                            setIsKeySaved(false);
                           }}
-                          className="px-4 border border-black hover:bg-red-50 text-red-600"
+                          className="px-4 border border-black hover:bg-red-50 text-red-600 text-[10px] font-bold uppercase"
                         >
                           清除
                         </button>
