@@ -1,8 +1,16 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { getApiKey } from "../lib/apiKey";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+function getAI() {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please set it in Settings or .env file.");
+  }
+  return new GoogleGenAI({ apiKey });
+}
 
 export async function extractNPCsFromText(text: string) {
+  const ai = getAI();
   const response = await ai.models.generateContent({
     model: "gemini-3.1-pro-preview",
     contents: `请从以下游戏设计文本中提取所有 NPC 角色。
@@ -50,7 +58,8 @@ export async function extractNPCsFromText(text: string) {
   }
 }
 
-export async function generateNPCImage(prompt: string, negativePrompt: string, baseImage?: string) {
+export async function generateNPCImage(prompt: string, negativePrompt: string, baseImages?: string[]) {
+  const ai = getAI();
   // Using gemini-2.5-flash-image for standard generation and editing
   // Refined for game industry standards: A-pose/T-pose feel, clean background
   const finalPrompt = `character design sheet, full body standing, front view, centered, facing camera, pure white background, isolated on white, no background elements, no props, flat lighting, high detail, masterpiece, ${prompt}`;
@@ -64,14 +73,16 @@ export async function generateNPCImage(prompt: string, negativePrompt: string, b
     ],
   };
 
-  if (baseImage) {
-    // If baseImage is provided, we are doing image-to-image editing
-    const base64Data = baseImage.includes(',') ? baseImage.split(',')[1] : baseImage;
-    contents.parts.unshift({
-      inlineData: {
-        mimeType: "image/png",
-        data: base64Data
-      }
+  if (baseImages && baseImages.length > 0) {
+    // If baseImages are provided, we are doing image-to-image editing/guidance
+    baseImages.forEach(baseImage => {
+      const base64Data = baseImage.includes(',') ? baseImage.split(',')[1] : baseImage;
+      contents.parts.unshift({
+        inlineData: {
+          mimeType: "image/png",
+          data: base64Data
+        }
+      });
     });
   }
 
@@ -95,6 +106,7 @@ export async function generateNPCImage(prompt: string, negativePrompt: string, b
 }
 
 export async function generateTurnaroundImage(baseImage: string, prompt: string) {
+  const ai = getAI();
   const finalPrompt = `character turnaround sheet, three-view drawing, front view, side view, back view, same character, consistent design, pure white background, isolated on white, ${prompt}`;
   const base64Data = baseImage.includes(',') ? baseImage.split(',')[1] : baseImage;
 
@@ -129,6 +141,7 @@ export async function generateTurnaroundImage(baseImage: string, prompt: string)
 }
 
 export async function generateDetailItemImage(itemDescription: string, npcStyle: string, baseImage?: string) {
+  const ai = getAI();
   const finalPrompt = `game item concept art, close-up, single object, isolated on white background, pure white background, high detail, ${npcStyle} style, ${itemDescription}`;
   
   const parts: any[] = [];

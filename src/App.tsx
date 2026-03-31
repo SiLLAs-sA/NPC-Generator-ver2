@@ -22,13 +22,10 @@ import {
   Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { NPC, ArchiveNPC } from './types';
-import { 
-  extractNPCsFromText, 
-  generateNPCImage, 
-  generateTurnaroundImage, 
-  generateDetailItemImage 
-} from './services/ai';
+import { NPC, ArchiveNPC, ReferenceGroup } from './types';
+import { extractNPCsFromText, generateNPCImage, generateTurnaroundImage, generateDetailItemImage } from './services/ai';
+import { getApiKey, saveApiKey } from './lib/apiKey';
+import { extractPalette } from './lib/colorUtils';
 import { db } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { cn } from './lib/utils';
@@ -41,6 +38,7 @@ const STYLE_PRESETS = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'generate' | 'archive' | 'settings'>('generate');
+  const [apiKey, setApiKey] = useState(getApiKey());
   const [inputText, setInputText] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [npcs, setNpcs] = useState<NPC[]>([]);
@@ -51,8 +49,66 @@ export default function App() {
   const [viewingArchiveNpcId, setViewingArchiveNpcId] = useState<string | null>(null);
   const [isGeneratingDetail, setIsGeneratingDetail] = useState(false);
   const [detailItemText, setDetailItemText] = useState('');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [showTurnaroundDeleteConfirm, setShowTurnaroundDeleteConfirm] = useState(false);
+  const [detailDeleteIndex, setDetailDeleteIndex] = useState<number | null>(null);
+  const [referenceGroups, setReferenceGroups] = useState<ReferenceGroup[]>([
+    { id: crypto.randomUUID(), name: '角色 1 参考', images: [] }
+  ]);
   
   const archivedNpcs = useLiveQuery(() => db.npcs.toArray());
+
+  const viewingNpc = archivedNpcs?.find(n => n.id === viewingArchiveNpcId);
+
+  useEffect(() => {
+    if (viewingNpc && (!viewingNpc.palette || viewingNpc.palette.length === 0)) {
+      refreshPalette(viewingNpc);
+    }
+    // Reset delete confirmation states when switching NPCs or closing
+    setShowTurnaroundDeleteConfirm(false);
+    setDetailDeleteIndex(null);
+  }, [viewingArchiveNpcId, viewingNpc?.palette?.length]);
+
+  const addReferenceGroup = () => {
+    setReferenceGroups(prev => [
+      ...prev,
+      { id: crypto.randomUUID(), name: `角色 ${prev.length + 1} 参考`, images: [] }
+    ]);
+  };
+
+  const removeReferenceGroup = (id: string) => {
+    setReferenceGroups(prev => prev.filter(g => g.id !== id));
+  };
+
+  const handleReferenceImageUpload = (groupId: string, file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64 = e.target?.result as string;
+      setReferenceGroups(prev => prev.map(g => {
+        if (g.id === groupId) {
+          if (g.images.length >= 2) {
+            alert('每个角色组最多上传 2 张参考图');
+            return g;
+          }
+          return { ...g, images: [...g.images, base64] };
+        }
+        return g;
+      }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeReferenceImage = (groupId: string, index: number) => {
+    setReferenceGroups(prev => prev.map(g => {
+      if (g.id === groupId) {
+        const nextImages = [...g.images];
+        nextImages.splice(index, 1);
+        return { ...g, images: nextImages };
+      }
+      return g;
+    }));
+  };
 
   const handleExtract = async () => {
     if (!inputText.trim()) return;
@@ -69,6 +125,7 @@ export default function App() {
         negativePrompt: '低质量, 模糊, 畸形, 糟糕的解剖结构, 复杂背景, 阴影, 透视, 侧视图, 只有上半身',
         images: [],
         isLocked: false,
+        originalInput: inputText,
         createdAt: Date.now()
       }));
       setNpcs(prev => [...prev, ...newNpcs]);
@@ -87,16 +144,16 @@ export default function App() {
     setNpcs(prev => prev.filter(npc => npc.id !== id));
   };
 
-  const handleGenerate = async (npc: NPC, baseImageOverride?: string) => {
+  const handleGenerate = async (npc: NPC, baseImagesOverride?: string[]) => {
     console.log('Generating images for NPC:', npc.name);
     setIsGenerating(prev => ({ ...prev, [npc.id]: true }));
     try {
       const prompt = `A character portrait of ${npc.name}, ${npc.traits.join(', ')}, ${npc.style} style, high quality, highly detailed, concept art`;
-      const baseImage = baseImageOverride || npc.referenceImage;
+      const baseImages = baseImagesOverride || npc.referenceImages;
       
       // Generate 4 images in parallel for variety
       const generationPromises = Array(4).fill(null).map(() => 
-        generateNPCImage(prompt, npc.negativePrompt, baseImage)
+        generateNPCImage(prompt, npc.negativePrompt, baseImages)
       );
       
       const results = await Promise.all(generationPromises);
@@ -113,10 +170,14 @@ export default function App() {
 
   const addToArchive = async (npc: NPC, imageIndex: number) => {
     try {
+      const mainImage = npc.images[imageIndex];
+      const palette = await extractPalette(mainImage);
+      
       const archiveItem: ArchiveNPC = {
         ...npc,
-        mainImage: npc.images[imageIndex],
-        selectedImageIndex: imageIndex
+        mainImage,
+        selectedImageIndex: imageIndex,
+        palette
       };
       await db.npcs.add(archiveItem);
       alert(`${npc.name} 已成功加入档案库。`);
@@ -149,7 +210,6 @@ export default function App() {
 
   const exportSelectedToExcel = async () => {
     if (selectedNpcIds.size === 0 || !archivedNpcs) {
-      alert('请先选择要导出的角色');
       return;
     }
 
@@ -163,21 +223,58 @@ export default function App() {
       { header: '描述', key: 'description', width: 40 },
       { header: '特征标签', key: 'traits', width: 40 },
       { header: '风格', key: 'style', width: 15 },
+      { header: '原始提示词', key: 'originalInput', width: 50 },
       { header: '创建时间', key: 'createdAt', width: 25 },
+      { header: '主视图', key: 'mainImage', width: 30 },
+      { header: '三视图', key: 'turnaroundImage', width: 30 },
+      { header: '细节图1', key: 'detail1', width: 30 },
+      { header: '细节图2', key: 'detail2', width: 30 },
+      { header: '细节图3', key: 'detail3', width: 30 },
     ];
 
-    selectedNpcs.forEach(npc => {
-      worksheet.addRow({
+    selectedNpcs.forEach((npc, index) => {
+      const rowIndex = index + 2;
+      const row = worksheet.addRow({
         name: npc.name,
         description: npc.description,
         traits: npc.traits.join(', '),
         style: npc.style,
+        originalInput: npc.originalInput || '',
         createdAt: new Date(npc.createdAt).toLocaleString(),
       });
+      
+      row.height = 160;
+      row.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+
+      const addImageToCell = (base64: string | undefined, colIndex: number) => {
+        if (!base64) return;
+        try {
+          const imageId = workbook.addImage({
+            base64: base64,
+            extension: 'png',
+          });
+          worksheet.addImage(imageId, {
+            tl: { col: colIndex, row: rowIndex - 1 },
+            ext: { width: 200, height: 200 }
+          });
+        } catch (e) {
+          console.error('Excel 图像导出失败:', e);
+        }
+      };
+
+      addImageToCell(npc.mainImage, 6);
+      addImageToCell(npc.turnaroundImage, 7);
+      if (npc.detailImages) {
+        npc.detailImages.slice(0, 3).forEach((img, i) => {
+          addImageToCell(img, 8 + i);
+        });
+      }
     });
 
     // Styling headers
+    worksheet.getRow(1).height = 30;
     worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
     worksheet.getRow(1).fill = {
       type: 'pattern',
       pattern: 'solid',
@@ -189,6 +286,17 @@ export default function App() {
 
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `NPC_Archive_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedNpcIds.size === 0) return;
+    try {
+      await db.npcs.bulkDelete(Array.from(selectedNpcIds));
+      setSelectedNpcIds(new Set());
+      setShowBulkDeleteConfirm(false);
+    } catch (error) {
+      console.error('批量删除失败:', error);
+    }
   };
 
   const handleGenerateTurnaround = async (npc: ArchiveNPC) => {
@@ -203,6 +311,26 @@ export default function App() {
       alert('生成三视图失败');
     } finally {
       setIsGeneratingDetail(false);
+    }
+  };
+
+  const handleDeleteTurnaround = async (npc: ArchiveNPC) => {
+    try {
+      await db.npcs.update(npc.id!, { turnaroundImage: undefined });
+      setShowTurnaroundDeleteConfirm(false);
+    } catch (error) {
+      console.error('删除失败:', error);
+    }
+  };
+
+  const handleDeleteDetailImage = async (npc: ArchiveNPC, index: number) => {
+    try {
+      const currentDetails = [...(npc.detailImages || [])];
+      currentDetails.splice(index, 1);
+      await db.npcs.update(npc.id!, { detailImages: currentDetails });
+      setDetailDeleteIndex(null);
+    } catch (error) {
+      console.error('删除失败:', error);
     }
   };
 
@@ -224,6 +352,15 @@ export default function App() {
     }
   };
 
+  const refreshPalette = async (npc: ArchiveNPC) => {
+    try {
+      const palette = await extractPalette(npc.mainImage);
+      await db.npcs.update(npc.id!, { palette });
+    } catch (error) {
+      console.error('提取配色失败:', error);
+    }
+  };
+
   const exportAllExtractedToExcel = async () => {
     if (npcs.length === 0) return;
     
@@ -235,18 +372,52 @@ export default function App() {
       { header: '描述', key: 'description', width: 40 },
       { header: '特征标签', key: 'traits', width: 40 },
       { header: '风格', key: 'style', width: 15 },
+      { header: '原始提示词', key: 'originalInput', width: 50 },
+      { header: '预览图', key: 'preview', width: 30 },
     ];
 
-    npcs.forEach(npc => {
-      worksheet.addRow({
+    npcs.forEach((npc, index) => {
+      const rowIndex = index + 2;
+      const row = worksheet.addRow({
         name: npc.name,
         description: npc.description,
         traits: npc.traits.join(', '),
         style: npc.style,
+        originalInput: npc.originalInput || '',
       });
+      
+      row.height = 160;
+      row.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+
+      if (npc.images && npc.images.length > 0) {
+        const img = npc.selectedImageIndex !== undefined ? npc.images[npc.selectedImageIndex] : npc.images[0];
+        try {
+          const imageId = workbook.addImage({
+            base64: img,
+            extension: 'png',
+          });
+          worksheet.addImage(imageId, {
+            tl: { col: 5, row: rowIndex - 1 },
+            ext: { width: 200, height: 200 }
+          });
+        } catch (e) {
+          console.error('Excel 预览图导出失败:', e);
+        }
+      }
     });
 
+    worksheet.getRow(1).height = 30;
     worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF000000' }
+    };
+    worksheet.getRow(1).eachCell(cell => {
+      cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
+    });
+
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `NPC_Extracted_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
@@ -254,10 +425,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-white flex flex-col">
       {/* Header / Navigation */}
-      <header className="border-b border-black p-6 flex justify-between items-center sticky top-0 bg-white z-10">
+      <header className="border-b border-black p-6 flex justify-between items-center sticky top-0 bg-white z-50">
         <div>
           <h1 className="text-4xl leading-none">NPC 形象生成工具</h1>
-          <p className="text-xs font-mono mt-1 uppercase tracking-widest opacity-60">系统版本 1.0 // 瑞士排版风格</p>
         </div>
         <nav className="flex gap-8">
           {[
@@ -312,6 +482,72 @@ export default function App() {
                       {isExtracting ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}
                       提取 NPC
                     </button>
+                  </div>
+                </div>
+
+                {/* Reference Images Section */}
+                <div className="border-t border-black p-4 bg-gray-50 space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                      <ImageIcon size={14} />
+                      角色生成参考图组 (辅助 AI 生成)
+                    </h3>
+                    <button 
+                      onClick={addReferenceGroup}
+                      className="text-[10px] font-bold uppercase underline flex items-center gap-1 hover:opacity-70"
+                    >
+                      <Plus size={12} />
+                      增加角色组
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {referenceGroups.map((group, gIdx) => (
+                      <div key={group.id} className="border border-black bg-white p-3 space-y-3">
+                        <div className="flex justify-between items-center">
+                          <input 
+                            type="text" 
+                            value={group.name}
+                            onChange={(e) => setReferenceGroups(prev => prev.map(g => g.id === group.id ? { ...g, name: e.target.value } : g))}
+                            className="text-[10px] font-bold uppercase w-full bg-transparent border-none focus:outline-none"
+                          />
+                          {referenceGroups.length > 1 && (
+                            <button onClick={() => removeReferenceGroup(group.id)} className="text-red-600 hover:opacity-70">
+                              <X size={12} />
+                            </button>
+                          )}
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                          {group.images.map((img, iIdx) => (
+                            <div key={iIdx} className="aspect-square border border-black relative group">
+                              <img src={img} className="w-full h-full object-cover" alt="Ref" />
+                              <button 
+                                onClick={() => removeReferenceImage(group.id, iIdx)}
+                                className="absolute top-1 right-1 bg-white border border-black p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                              >
+                                <X size={10} />
+                              </button>
+                            </div>
+                          ))}
+                          {group.images.length < 2 && (
+                            <label className="aspect-square border border-dashed border-black flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 transition-colors">
+                              <Upload size={16} className="opacity-30" />
+                              <span className="text-[8px] uppercase font-mono mt-1 opacity-40">上传参考</span>
+                              <input 
+                                type="file" 
+                                className="hidden" 
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) handleReferenceImageUpload(group.id, file);
+                                }}
+                              />
+                            </label>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </section>
@@ -445,40 +681,67 @@ export default function App() {
                           </div>
 
                           <div>
-                            <label className="swiss-label">参考图 / 基础图</label>
-                            <div className="flex gap-2 items-center">
-                              <label className="w-12 h-12 border border-black border-dashed flex items-center justify-center cursor-pointer hover:bg-gray-50 shrink-0">
-                                <Upload size={14} />
-                                <input 
-                                  type="file" 
-                                  accept="image/*"
-                                  className="hidden" 
-                                  onChange={(e) => {
-                                    const file = e.target.files?.[0];
-                                    if (file) {
-                                      const reader = new FileReader();
-                                      reader.onloadend = () => {
-                                        updateNpc(npc.id, { referenceImage: reader.result as string });
-                                      };
-                                      reader.readAsDataURL(file);
-                                    }
-                                  }}
-                                />
-                              </label>
-                              {npc.referenceImage && (
-                                <div className="relative w-12 h-12 border border-black group">
-                                  <img src={npc.referenceImage} alt="Reference" className="w-full h-full object-cover" />
-                                  <button 
-                                    onClick={() => updateNpc(npc.id, { referenceImage: undefined })}
-                                    className="absolute -top-1 -right-1 bg-black text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                                  >
-                                    <X size={8} />
-                                  </button>
+                            <label className="swiss-label flex items-center gap-2">
+                              <ImageIcon size={12} />
+                              关联参考图组 (辅助 AI 生成)
+                            </label>
+                            <div className="space-y-2">
+                              <select 
+                                value={npc.referenceGroupId || ''}
+                                onChange={(e) => {
+                                  const groupId = e.target.value;
+                                  const group = referenceGroups.find(g => g.id === groupId);
+                                  updateNpc(npc.id, { 
+                                    referenceGroupId: groupId || undefined,
+                                    referenceImages: group ? group.images : [] 
+                                  });
+                                }}
+                                className="w-full text-[10px] font-bold uppercase border border-black p-2 focus:outline-none bg-white"
+                              >
+                                <option value="">不使用参考图组</option>
+                                {referenceGroups.map(group => (
+                                  <option key={group.id} value={group.id}>{group.name} ({group.images.length} 张图)</option>
+                                ))}
+                              </select>
+                              
+                              {npc.referenceImages && npc.referenceImages.length > 0 && (
+                                <div className="flex gap-2">
+                                  {npc.referenceImages.map((img, idx) => (
+                                    <div key={idx} className="w-12 h-12 border border-black relative group">
+                                      <img src={img} alt="Ref" className="w-full h-full object-cover" />
+                                    </div>
+                                  ))}
+                                  <span className="text-[9px] text-gray-400 uppercase leading-tight flex items-center">
+                                    已关联参考图组，生图将基于这些图进行修改
+                                  </span>
                                 </div>
                               )}
-                              <span className="text-[9px] text-gray-400 uppercase leading-tight">
-                                {npc.referenceImage ? '已加载参考图，生图将基于此图进行修改' : '上传参考图进行“图生图”修改'}
-                              </span>
+                              
+                              {(!npc.referenceImages || npc.referenceImages.length === 0) && (
+                                <div className="flex gap-2 items-center">
+                                  <label className="w-12 h-12 border border-black border-dashed flex items-center justify-center cursor-pointer hover:bg-gray-50 shrink-0">
+                                    <Upload size={14} />
+                                    <input 
+                                      type="file" 
+                                      accept="image/*"
+                                      className="hidden" 
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          const reader = new FileReader();
+                                          reader.onloadend = () => {
+                                            updateNpc(npc.id, { referenceImages: [reader.result as string] });
+                                          };
+                                          reader.readAsDataURL(file);
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                  <span className="text-[9px] text-gray-400 uppercase leading-tight">
+                                    或上传单张参考图进行“图生图”修改
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </div>
 
@@ -528,7 +791,7 @@ export default function App() {
                                           <Archive size={16} />
                                         </button>
                                         <button 
-                                          onClick={() => updateNpc(npc.id, { referenceImage: img })}
+                                          onClick={() => updateNpc(npc.id, { referenceImages: [img] })}
                                           className="bg-white text-black p-2 hover:bg-gray-200"
                                           title="设为参考图进行重绘"
                                         >
@@ -587,6 +850,24 @@ export default function App() {
                   >
                     {archivedNpcs && selectedNpcIds.size === archivedNpcs.length ? '取消全选' : '全选'}
                   </button>
+                  
+                  {showBulkDeleteConfirm ? (
+                    <div className="flex items-center gap-2 px-4 py-2 border border-red-600 bg-red-50 animate-in fade-in slide-in-from-right-2">
+                      <span className="text-[10px] font-bold text-red-600 uppercase">确定删除 {selectedNpcIds.size} 项?</span>
+                      <button onClick={handleDeleteSelected} className="text-[10px] font-black uppercase text-red-600 hover:underline">确认</button>
+                      <button onClick={() => setShowBulkDeleteConfirm(false)} className="text-[10px] font-black uppercase text-gray-500 hover:underline">取消</button>
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={() => setShowBulkDeleteConfirm(true)}
+                      disabled={selectedNpcIds.size === 0}
+                      className="px-4 py-2 border border-black text-[10px] uppercase font-bold hover:bg-red-600 hover:text-white hover:border-red-600 transition-all disabled:opacity-20 flex items-center gap-2"
+                    >
+                      <Trash2 size={14} />
+                      删除所选
+                    </button>
+                  )}
+
                   <button 
                     onClick={exportSelectedToExcel}
                     disabled={selectedNpcIds.size === 0}
@@ -632,9 +913,40 @@ export default function App() {
                     <div className="p-4 space-y-2">
                       <div className="flex justify-between items-start">
                         <h3 className="text-lg leading-none font-black uppercase tracking-tighter">{npc.name}</h3>
-                        <button onClick={() => db.npcs.delete(npc.id!)} className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-600">
-                          <Trash2 size={14} />
-                        </button>
+                        
+                        {deleteConfirmId === npc.id ? (
+                          <div className="flex items-center gap-2 animate-in fade-in zoom-in duration-200">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                db.npcs.delete(npc.id!);
+                                setDeleteConfirmId(null);
+                              }} 
+                              className="text-[10px] font-black uppercase text-red-600 hover:underline"
+                            >
+                              确认
+                            </button>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirmId(null);
+                              }} 
+                              className="text-[10px] font-black uppercase text-gray-400 hover:underline"
+                            >
+                              取消
+                            </button>
+                          </div>
+                        ) : (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirmId(npc.id!);
+                            }} 
+                            className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-600"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
                       </div>
                       <p className="text-[10px] font-mono uppercase opacity-60">风格: {npc.style}</p>
                       <div className="flex flex-wrap gap-1">
@@ -694,15 +1006,56 @@ export default function App() {
                                 <div className="space-y-4">
                                   <div className="flex justify-between items-end">
                                     <label className="swiss-label">三视图 / 角色转面图</label>
-                                    {!npc.turnaroundImage && (
-                                      <button 
-                                        onClick={() => handleGenerateTurnaround(npc)}
-                                        disabled={isGeneratingDetail}
-                                        className="text-[10px] font-bold uppercase underline disabled:opacity-40"
-                                      >
-                                        {isGeneratingDetail ? '生成中...' : '一键生成三视图'}
-                                      </button>
-                                    )}
+                                    <div className="flex gap-3">
+                                      {npc.turnaroundImage && (
+                                        <>
+                                          {!showTurnaroundDeleteConfirm ? (
+                                            <>
+                                              <button 
+                                                onClick={() => handleGenerateTurnaround(npc)}
+                                                disabled={isGeneratingDetail}
+                                                className="text-[10px] font-bold uppercase underline disabled:opacity-40 flex items-center gap-1"
+                                              >
+                                                <RefreshCw size={10} className={isGeneratingDetail ? 'animate-spin' : ''} />
+                                                {isGeneratingDetail ? '生成中...' : '重新生成'}
+                                              </button>
+                                              <button 
+                                                onClick={() => setShowTurnaroundDeleteConfirm(true)}
+                                                className="text-[10px] font-bold uppercase underline text-red-600 flex items-center gap-1"
+                                              >
+                                                <Trash2 size={10} />
+                                                删除
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <div className="flex items-center gap-2 bg-red-50 px-2 py-1 border border-red-200">
+                                              <span className="text-[9px] font-bold text-red-600 uppercase">确认删除?</span>
+                                              <button 
+                                                onClick={() => handleDeleteTurnaround(npc)}
+                                                className="text-[9px] font-black uppercase underline text-red-700"
+                                              >
+                                                是
+                                              </button>
+                                              <button 
+                                                onClick={() => setShowTurnaroundDeleteConfirm(false)}
+                                                className="text-[9px] font-black uppercase underline text-gray-500"
+                                              >
+                                                否
+                                              </button>
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                      {!npc.turnaroundImage && (
+                                        <button 
+                                          onClick={() => handleGenerateTurnaround(npc)}
+                                          disabled={isGeneratingDetail}
+                                          className="text-[10px] font-bold uppercase underline disabled:opacity-40"
+                                        >
+                                          {isGeneratingDetail ? '生成中...' : '一键生成三视图'}
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="border border-black aspect-[16/9] bg-gray-50 flex items-center justify-center overflow-hidden">
                                     {npc.turnaroundImage ? (
@@ -719,6 +1072,44 @@ export default function App() {
 
                               {/* Right: Info & Details */}
                               <div className="space-y-8">
+                                <div className="space-y-4">
+                                  <div className="flex justify-between items-end">
+                                    <label className="swiss-label">角色配色方案 (Color Palette)</label>
+                                    <button 
+                                      onClick={() => refreshPalette(npc)}
+                                      className="text-[10px] font-bold uppercase underline flex items-center gap-1"
+                                    >
+                                      <RefreshCw size={10} />
+                                      重新提取
+                                    </button>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    {npc.palette && npc.palette.length > 0 ? (
+                                      npc.palette.map((color, i) => (
+                                        <div key={i} className="flex-1 group relative">
+                                          <div 
+                                            className="h-12 border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" 
+                                            style={{ backgroundColor: color }}
+                                          />
+                                          <div className="mt-1 text-[9px] font-mono uppercase text-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                            {color}
+                                          </div>
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <div className="w-full py-4 text-center border border-dashed border-black opacity-30 flex flex-col items-center gap-2">
+                                        <p className="text-[10px] uppercase font-mono">暂无配色数据</p>
+                                        <button 
+                                          onClick={() => refreshPalette(npc)}
+                                          className="text-[9px] font-black uppercase underline hover:opacity-100"
+                                        >
+                                          点击立即分析图片配色
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+
                                 <div className="space-y-4">
                                   <label className="swiss-label">角色描述</label>
                                   <p className="text-sm leading-relaxed">{npc.description}</p>
@@ -756,8 +1147,34 @@ export default function App() {
 
                                   <div className="grid grid-cols-3 gap-4">
                                     {npc.detailImages?.map((img, i) => (
-                                      <div key={i} className="border border-black aspect-square bg-gray-50">
+                                      <div key={i} className="border border-black aspect-square bg-gray-50 relative group">
                                         <img src={img} alt={`Detail ${i}`} className="w-full h-full object-cover" />
+                                        {detailDeleteIndex !== i ? (
+                                          <button 
+                                            onClick={() => setDetailDeleteIndex(i)}
+                                            className="absolute top-1 right-1 p-1 bg-white border border-black opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50"
+                                          >
+                                            <Trash2 size={12} className="text-red-600" />
+                                          </button>
+                                        ) : (
+                                          <div className="absolute inset-0 bg-red-600/90 flex flex-col items-center justify-center p-2 text-center">
+                                            <p className="text-[10px] font-black text-white uppercase mb-2">确认删除?</p>
+                                            <div className="flex gap-3">
+                                              <button 
+                                                onClick={() => handleDeleteDetailImage(npc, i)}
+                                                className="text-[10px] font-black text-white underline uppercase"
+                                              >
+                                                是
+                                              </button>
+                                              <button 
+                                                onClick={() => setDetailDeleteIndex(null)}
+                                                className="text-[10px] font-black text-white/70 underline uppercase"
+                                              >
+                                                否
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
                                       </div>
                                     ))}
                                     {(!npc.detailImages || npc.detailImages.length === 0) && (
@@ -792,8 +1209,33 @@ export default function App() {
                 <div className="space-y-4">
                   <div>
                     <label className="swiss-label">Gemini API Key</label>
-                    <input type="password" value="••••••••••••••••" disabled className="swiss-input bg-gray-50" />
-                    <p className="text-[10px] mt-1 text-gray-500 uppercase">通过系统环境变量管理。</p>
+                    <div className="flex gap-2">
+                      <input 
+                        type="password" 
+                        value={apiKey} 
+                        onChange={(e) => {
+                          const newKey = e.target.value;
+                          setApiKey(newKey);
+                          saveApiKey(newKey);
+                        }}
+                        placeholder="在此输入您的 Gemini API Key..."
+                        className="swiss-input" 
+                      />
+                      {apiKey && (
+                        <button 
+                          onClick={() => {
+                            setApiKey('');
+                            saveApiKey('');
+                          }}
+                          className="px-4 border border-black hover:bg-red-50 text-red-600"
+                        >
+                          清除
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[10px] mt-1 text-gray-500 uppercase">
+                      {process.env.GEMINI_API_KEY ? "已检测到系统环境变量，您可以在此覆盖它。" : "请在此输入您的 API Key 以启用 AI 功能。"}
+                    </p>
                   </div>
                   <div>
                     <label className="swiss-label">默认生图引擎</label>
